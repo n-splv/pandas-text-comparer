@@ -1,0 +1,20 @@
+[tool.poetry]
+name = "pandas-text-comparer"
+version = "0.1.0"
+description = ""
+authors = ["n-splv <nick.maykr@gmail.com>"]
+license = "MIT"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+pandas = "^2.2.1"
+pandera = "^0.18.3"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[project.urls]
+Homepage = "https://github.com/n-splv/pandas-text-comparer"

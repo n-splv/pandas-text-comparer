@@ -1,1 +1,0 @@
-from comparer import TextComparer
