@@ -20,7 +20,7 @@ SortOrder = Literal["asc", "desc"]
 
 class ComparerResult(pa.DataFrameModel):
     ratio: float
-    row_html: str
+    any_other_columns: str = pa.Field(alias="(?!ratio).+", regex=True)
 
 
 class TextComparer:
@@ -38,10 +38,9 @@ class TextComparer:
 
         assert isinstance(df, pd.DataFrame)
 
-        self._df = df
-        self._column_names = df.columns.tolist()
         self._column_a = column_a
         self._column_b = column_b
+        self._df = df[[column_a, column_b]]
         self._min_ratio = min_ratio_for_highlight
 
         self.result: DataFrame[ComparerResult] | None = None
@@ -76,35 +75,18 @@ class TextComparer:
                 break
 
         result = apply_method(self._process_row, axis=1, result_type="expand")
-        result.columns = ["0", *self._column_names, "ratio", "-1"]
+        result.columns = ["ratio", self._column_a, self._column_b]
         return result
 
-    def _process_row(self, row: pd.Series) -> list[str | float]:
+    def _process_row(self, row: pd.Series) -> tuple[float, str, str]:
         """
         Returns a similarity ratio and an HTML text
         """
-        result = ["<tr>"]
-        text_a = row[self._column_a]
-        text_b = row[self._column_b]
+        text_a, text_b = row.tolist()
         opcodes, ratio = self._compare_strings(text_a, text_b)
         if ratio >= self._min_ratio:
             text_a, text_b = self._highlight_changes(text_a, text_b, opcodes)
-
-        for column in self._column_names:
-            if column == self._column_a:
-                text = text_a
-            elif column == self._column_b:
-                text = text_b
-            else:
-                text = row[column]
-            result.append(f"<td> {text} </td>")
-
-        # Add a column with ratio values
-        result.append(f"<td> {ratio:.2f} </td>")
-
-        result.append("</tr>")
-
-        return result
+        return ratio, text_a, text_b
 
     def _get_full_html(self, rows_html: str) -> str:
 
@@ -131,11 +113,25 @@ class TextComparer:
         html_df = self.result.copy()
 
         if df is not None:
-            html_df = html_df.loc[df.index.tolist()]
+            df = df.drop(columns=[self._column_a, self._column_b])
+            html_df = pd.merge(df, html_df, left_index=True, right_index=True)
 
         if sort_by_ratio in get_args(SortOrder):
             ascending = sort_by_ratio == "asc"
             html_df = html_df.sort_values(by="ratio", ascending=ascending)
+        html_df = html_df.drop(columns=["ratio"])
+
+        rows_html = []
+        for t in html_df.itertuples(index=False):
+            row_htm = "".join([
+                "<tr>",
+                *[f"<td> {text} </td>" for text in t],
+                "</tr>",
+            ])
+            rows_html.append(row_htm)
+
+        return "".join(rows_html)
+
 
         row_htmls = html_df["row_html"].tolist()[slice(max_rows)]
         return "".join(row_htmls)
@@ -157,7 +153,7 @@ class TextComparer:
 
         seq = SequenceMatcher(a=text_a, b=text_b, autojunk=False)
         # noinspection PyTypeChecker
-        return seq.get_opcodes(), seq.ratio()
+        return seq.get_opcodes(), round(seq.ratio(), 2)
 
     @staticmethod
     def _highlight_changes(text_a: str,
