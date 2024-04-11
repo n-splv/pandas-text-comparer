@@ -1,3 +1,9 @@
+"""
+run() processes two columns only and returns ratio and an HTML column
+need to pass df to get_html, it will be mapped to lambda adding <td>
+and merged with result by index.
+"""
+
 from difflib import SequenceMatcher
 from typing import get_args, Literal, TypeAlias
 
@@ -70,14 +76,14 @@ class TextComparer:
                 break
 
         result = apply_method(self._process_row, axis=1, result_type="expand")
-        result.columns = ["ratio", "row_html"]
+        result.columns = ["0", *self._column_names, "ratio", "-1"]
         return result
 
-    def _process_row(self, row: pd.Series) -> tuple[float, str]:
+    def _process_row(self, row: pd.Series) -> list[str | float]:
         """
         Returns a similarity ratio and an HTML text
         """
-        row_html = ["<tr>"]
+        result = ["<tr>"]
         text_a = row[self._column_a]
         text_b = row[self._column_b]
         opcodes, ratio = self._compare_strings(text_a, text_b)
@@ -91,14 +97,14 @@ class TextComparer:
                 text = text_b
             else:
                 text = row[column]
-            row_html.append(f"<td> {text} </td>")
+            result.append(f"<td> {text} </td>")
 
-        # Add column with ratio values
-        row_html.append(f"<td> {ratio:.2f} </td>")
+        # Add a column with ratio values
+        result.append(f"<td> {ratio:.2f} </td>")
 
-        row_html.append("</tr>")
+        result.append("</tr>")
 
-        return ratio, "".join(row_html)
+        return result
 
     def _get_full_html(self, rows_html: str) -> str:
 
@@ -133,6 +139,15 @@ class TextComparer:
 
         row_htmls = html_df["row_html"].tolist()[slice(max_rows)]
         return "".join(row_htmls)
+
+    def _get_filtered_html_df(self,
+                              df: pd.DataFrame) -> DataFrame[ComparerResult]:
+
+        html_df = self.result.loc[df.index.tolist()]
+        html_df["row_html"] = html_df["row_html"].apply(
+            lambda row: []
+        )
+        return html_df
 
     @staticmethod
     def _compare_strings(text_a: str,
@@ -169,3 +184,12 @@ class TextComparer:
             text_b = text_b[:b1] + [html_style] + text_b[b1:]
 
         return "".join(text_a), "".join(text_b)
+
+
+class ComparerResultFilter:
+
+    @classmethod
+    def filter(cls,
+               comparer_result: DataFrame[ComparerResult],
+               filter_df: pd.DataFrame):
+        ...
