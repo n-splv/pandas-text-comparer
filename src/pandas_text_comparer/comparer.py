@@ -1,10 +1,7 @@
-"""
-run() processes two columns only and returns ratio and an HTML column
-need to pass df to get_html, it will be mapped to lambda adding <td>
-and merged with result by index.
-"""
+from __future__ import annotations
 
 from difflib import SequenceMatcher
+from itertools import islice
 from typing import get_args, Literal, TypeAlias
 
 import pandas as pd
@@ -19,8 +16,25 @@ SortOrder = Literal["asc", "desc"]
 
 
 class ComparerResult(pa.DataFrameModel):
+    """
+    The result of comparison between two text columns.
+
+    `ratio` - difflib.SequenceMatcher's metric of similarity between two texts;
+
+    `column_a`, `column_b` - columns, containing the original and modified
+    texts with some HTML code inserted into them. The names of these columns
+    are not known in advance - they're set to be equal to the source dataset.
+    """
     ratio: float
-    any_other_columns: str = pa.Field(alias="(?!ratio).+", regex=True)
+    column_a: str = pa.Field(alias="(?!ratio).+", regex=True)
+    column_b: str = pa.Field(alias="(?!ratio).+", regex=True)
+
+    @pa.dataframe_check
+    def check_exactly_three_columns(cls, df: pd.DataFrame) -> bool:
+        return df.shape[1] == 3
+
+    class Config:
+        ordered = True
 
 
 class TextComparer:
@@ -35,34 +49,70 @@ class TextComparer:
                  column_a: str,
                  column_b: str,
                  min_ratio_for_highlight: float = 0.0):
+        """
+        Creates a comparer operating on the texts of the provided DataFrame.
+        The next step should be running the comparison with `comparer.run()`
+
+        :param df: A DataFrame containing the columns with texts to compare
+        :param column_a: Name of the column with the 'original' texts
+        :param column_b: Name of the column with the 'modified' texts
+        :param min_ratio_for_highlight: Highlight edits in the texts that are
+        at least `min_ratio` similar. For the definition of `ratio` see
+        difflib.py
+        """
 
         assert isinstance(df, pd.DataFrame)
 
-        self._column_a = column_a
-        self._column_b = column_b
+        self._result_columns = ["ratio", column_a, column_b]
         self._df = df[[column_a, column_b]]
         self._min_ratio = min_ratio_for_highlight
 
         self.result: DataFrame[ComparerResult] | None = None
 
     def run(self) -> None:
-        if self._df is None:
-            err_message = "The comparer has already been run"
-            raise ValueError(err_message)
+        """
+        Run the comparison, then save the edit ratios and the texts with
+        inserted HTML code to `self.result`
+        """
+        if self.result is not None:
+            return
 
         self.result = self._process_rows()
         self._df = None
 
     def get_html(self,
-                 df: pd.DataFrame | None = None,
+                 df: pd.DataFrame | pd.Series | None = None,
+                 show_index: bool = True,
                  max_rows: int | None = 1000,
                  sort_by_ratio: SortOrder | None = None) -> str:
         """
-        If a dataframe is passed, its index is used to select the
-        rows to display
+        If a dataframe is passed, it gets merged with the comparer
+        result. This allows for filtering rows and adding columns in
+        the final HTML.
         """
-        rows_html = self._get_rows_html(df, max_rows, sort_by_ratio)
-        return self._get_full_html(rows_html)
+        if df is not None:
+            # Exclude original text cloumns from result
+            df = df.to_frame() if isinstance(df, pd.Series) else df
+            df = df.drop(
+                columns=self._result_columns[1:],
+                errors="ignore"
+            )
+
+        rows_html = self._get_rows_html(df, show_index, max_rows, sort_by_ratio)
+        return self._get_full_html(df, rows_html, show_index)
+
+    @classmethod
+    @pa.check_input(ComparerResult.to_schema())
+    def from_result(cls,
+                    result: DataFrame[ComparerResult]) -> TextComparer:
+        """
+        Get a new redy-to-use comparer from the results of another one,
+        which has already been run
+        """
+        comparer = cls.__new__(cls)
+        comparer.result = result
+        comparer._result_columns = result.columns.tolist()
+        return comparer
 
     def _process_rows(self) -> DataFrame[ComparerResult]:
 
@@ -75,12 +125,12 @@ class TextComparer:
                 break
 
         result = apply_method(self._process_row, axis=1, result_type="expand")
-        result.columns = ["ratio", self._column_a, self._column_b]
+        result.columns = self._result_columns
         return result
 
     def _process_row(self, row: pd.Series) -> tuple[float, str, str]:
         """
-        Returns a similarity ratio and an HTML text
+        Returns a similarity ratio and two HTML texts
         """
         text_a, text_b = row.tolist()
         opcodes, ratio = self._compare_strings(text_a, text_b)
@@ -88,9 +138,36 @@ class TextComparer:
             text_a, text_b = self._highlight_changes(text_a, text_b, opcodes)
         return ratio, text_a, text_b
 
-    def _get_full_html(self, rows_html: str) -> str:
+    def _get_rows_html(self,
+                       df: pd.DataFrame | None,
+                       show_index: bool,
+                       max_rows: int | None,
+                       sort_by_ratio: SortOrder | None) -> str:
 
-        columns = self._column_names + ["ratio"]
+        html_df = self.result.copy()
+
+        if df is not None:
+            html_df = pd.merge(df, html_df, left_index=True, right_index=True)
+
+        if sort_by_ratio in get_args(SortOrder):
+            ascending = sort_by_ratio == "asc"
+            html_df = html_df.sort_values(by="ratio", ascending=ascending)
+
+        row_iterator = islice(html_df.itertuples(index=show_index), max_rows)
+        rows_html = [self._row_to_html(row) for row in row_iterator]
+
+        return "".join(rows_html)
+
+    def _get_full_html(self,
+                       df: pd.DataFrame | None,
+                       rows_html: str,
+                       show_index: bool) -> str:
+
+        columns = ["#"] if show_index else []
+        if df is not None:
+            columns += df.columns.tolist()
+        columns += self._result_columns
+
         table_header_row = "".join([f"<th> {col} </th>" for col in columns])
         table_head = "<thead>" + table_header_row + "</thead>"
         table_body = "<tbody>" + rows_html + "</tbody>"
@@ -105,45 +182,13 @@ class TextComparer:
         """
         return html
 
-    def _get_rows_html(self,
-                       df: pd.DataFrame | None,
-                       max_rows: int | None,
-                       sort_by_ratio: SortOrder | None) -> str:
-
-        html_df = self.result.copy()
-
-        if df is not None:
-            df = df.drop(columns=[self._column_a, self._column_b])
-            html_df = pd.merge(df, html_df, left_index=True, right_index=True)
-
-        if sort_by_ratio in get_args(SortOrder):
-            ascending = sort_by_ratio == "asc"
-            html_df = html_df.sort_values(by="ratio", ascending=ascending)
-        html_df = html_df.drop(columns=["ratio"])
-
-        rows_html = []
-        for t in html_df.itertuples(index=False):
-            row_htm = "".join([
-                "<tr>",
-                *[f"<td> {text} </td>" for text in t],
-                "</tr>",
-            ])
-            rows_html.append(row_htm)
-
-        return "".join(rows_html)
-
-
-        row_htmls = html_df["row_html"].tolist()[slice(max_rows)]
-        return "".join(row_htmls)
-
-    def _get_filtered_html_df(self,
-                              df: pd.DataFrame) -> DataFrame[ComparerResult]:
-
-        html_df = self.result.loc[df.index.tolist()]
-        html_df["row_html"] = html_df["row_html"].apply(
-            lambda row: []
-        )
-        return html_df
+    @staticmethod
+    def _row_to_html(row: tuple) -> str:
+        return "".join([
+            "<tr>",
+            *[f"<td> {text} </td>" for text in row],
+            "</tr>",
+        ])
 
     @staticmethod
     def _compare_strings(text_a: str,
@@ -180,12 +225,3 @@ class TextComparer:
             text_b = text_b[:b1] + [html_style] + text_b[b1:]
 
         return "".join(text_a), "".join(text_b)
-
-
-class ComparerResultFilter:
-
-    @classmethod
-    def filter(cls,
-               comparer_result: DataFrame[ComparerResult],
-               filter_df: pd.DataFrame):
-        ...
