@@ -81,25 +81,36 @@ class TextComparer:
         self._df = None
 
     def get_html(self,
-                 df: pd.DataFrame | pd.Series | None = None,
+                 data: pd.DataFrame | pd.Series | pd.Index | None = None,
                  show_index: bool = True,
                  max_rows: int | None = 1000,
                  sort_by_ratio: SortOrder | None = None) -> str:
         """
-        If a dataframe is passed, it gets merged with the comparer
+        If a `data` object is passed, it gets merged with the comparer
         result. This allows for filtering rows and adding columns in
         the final HTML.
-        """
-        if df is not None:
-            # Exclude original text cloumns from result
-            df = df.to_frame() if isinstance(df, pd.Series) else df
-            df = df.drop(
-                columns=self._result_columns[1:],
-                errors="ignore"
-            )
 
-        rows_html = self._get_rows_html(df, show_index, max_rows, sort_by_ratio)
-        return self._get_full_html(df, rows_html, show_index)
+        A DataFrame type is more convenient to work with down the line,
+        so both the Series and Index are converted to it.
+        """
+        if data is not None:
+            if isinstance(data, pd.Series):
+                data = data.to_frame()
+
+            elif isinstance(data, pd.Index):
+                # Make a DataFrame with no columns
+                data = data.to_frame().drop(columns=[0])
+
+            # Exclude the original text cloumns
+            data = data.drop(columns=self._result_columns[1:], errors="ignore")
+
+        rows_html = self._get_rows_html(
+            data,
+            show_index,
+            max_rows,
+            sort_by_ratio
+        )
+        return self._get_full_html(data, rows_html, show_index)
 
     @classmethod
     @pa.check_input(ComparerResult.to_schema())
