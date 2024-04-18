@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "pandas-text-comparer"
-version = "0.1.0"
+version = "0.1.1"
 description = "Compare texts within a pandas DataFrame, highlighting changes and computing similarity ratios"
 authors = ["n-splv <nick.maykr@gmail.com>"]
 license = "MIT"
